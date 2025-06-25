@@ -12,6 +12,11 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 任务调度框架 - 支持Cron表达式和DAG依赖
  */
 public class DAGTaskScheduler {
+    public interface Task {
+        String getId();
+
+        void execute();
+    }
 
     // 带依赖关系的任务包装类
     public static class TaskNode {
@@ -44,6 +49,8 @@ public class DAGTaskScheduler {
         private final ExecutorService taskExecutor = Executors.newWorkStealingPool();
         private final Map<String, TaskNode> taskGraph = Maps.newConcurrentMap();
         private final Map<String, ScheduledFuture<?>> cronJobs = Maps.newConcurrentMap();
+        private final int COMMON_TASK_TYPE = 1;
+        private final int SCHEDULE_TASK_TYPE = 2;
 
         // 添加任务到DAG
         public void addTask(Task task, List<String> dependencyIds) {
@@ -62,7 +69,7 @@ public class DAGTaskScheduler {
         public void scheduleCronTask(Task task, String cronExpression) {
             CronExpression cron = new CronExpression(cronExpression);
             Runnable job = () -> {
-                if (canExecute(task.getId())) {
+                if (canExecute(task.getId(), SCHEDULE_TASK_TYPE)) {
                     submitTask(task);
                 }
             };
@@ -102,9 +109,14 @@ public class DAGTaskScheduler {
         }
 
         // 检查任务是否可执行
-        private boolean canExecute(String taskId) {
-            TaskNode node = taskGraph.get(taskId);
-            return node != null && node.pendingDependencies.get() == 0;
+        private boolean canExecute(String taskId, int taskType) {
+            if (taskType == COMMON_TASK_TYPE) {
+                TaskNode node = taskGraph.get(taskId);
+                return node != null && node.pendingDependencies.get() == 0;
+            } else if (taskType == SCHEDULE_TASK_TYPE) {
+                return cronJobs.keySet().stream().anyMatch(taskId::equals);
+            }
+            return false;
         }
 
         // 失败处理
@@ -186,7 +198,7 @@ public class DAGTaskScheduler {
             if (parts[0].equals("*") && parts[1].equals("*")) {
                 return unit.convert(1, TimeUnit.MINUTES); // 每分钟
             }
-            if (parts[0].startsWith("*/")) {
+            if (parts[0].startsWith("*/")) {    //间隔多少秒执行
                 int interval = Integer.parseInt(parts[0].substring(2));
                 return unit.convert(interval, TimeUnit.SECONDS);
             }
@@ -211,7 +223,7 @@ public class DAGTaskScheduler {
         scheduler.addTask(cleanupTask, List.of("REPORT", "PROCESS"));
 
         // 添加定时任务
-        scheduler.scheduleCronTask(createTask("DAILY_BACKUP", "Backup data"), "0 0 2 * * *");
+        scheduler.scheduleCronTask(createTask("DAILY_BACKUP", "Backup data"), "*/2 * * * * *");
 
         // 启动调度
         scheduler.start();
@@ -234,7 +246,7 @@ public class DAGTaskScheduler {
                         System.currentTimeMillis(), id, name);
                 // 模拟任务执行时间
                 try {
-                    Thread.sleep(new Random().nextInt(1000));
+                    Thread.sleep(new Random().nextInt(1500));
                 } catch (InterruptedException ignored) {
                 }
             }
